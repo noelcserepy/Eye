@@ -1,5 +1,6 @@
 import cv2
 import math
+import random
 import numpy as np
 
 
@@ -18,41 +19,47 @@ class Eye:
         self.clock = 0
         self.reset_timer = 50
         self.face_dist = 0
-        self.depth_multiplier = 1000
 
         # Eye parameters
         self.eye_radius = 150
         self.iris_radius = 80
         self.pupil_radius = 30
-        self.eye_pos = [0, 0]
+        self.eye_pos = [self.center[0], self.center[1]]
         self.iris_color = (239, 227, 142)
         self.eye_speed = 25
         self.min_distance = 3
         self.face_pos = [0, 0]
-        self.end = 5
 
-        # Eye mask
-        self.mask_anim = self.load_mask()
-        self.mask = self.mask_anim[0]
-        self.line_anim = self.load_line()
-        self.anim_frame = 0
+        self.min_y_pos = self.center[1] - self.eye_radius
+        self.max_y_pos = self.center[1] + self.eye_radius
+
+        # Animation
+        self.ul_line = self.load_anims("./Anims/Upper_Lid_Line/Upper_Lid_Line-")
+        self.ul_mask = self.load_anims("./Anims/Upper_Lid_Mask/Upper_Lid_Mask-")
+        self.ll_line = self.load_anims("./Anims/Lower_Lid_Line/Lower_Lid_Line-")
+        self.ll_mask = self.load_anims("./Anims/Lower_Lid_Mask/Lower_Lid_Mask-")
+        self.mask = self.ul_mask[0]
+        self.ul_frame = 0
+        self.ll_frame = 0
+        self.anim_end_frame = 16
+
+        self.expressions = {
+            "stare": [0, 0],
+            "open": [2, 2],
+            "squint": [6, 6],
+            "amused": [1, 6],
+            "lazy": [6, 2],
+            "pissed": [8, 0],
+            "closed": [15, 0],
+        }
+        self.current_expression = [0, 0]
 
         self.run()
 
-    def load_line(self):
+    def load_anims(self, path):
         mask_anim = []
-        for i in range(13):
-            img = cv2.imread(f"./Eye_Anim/Line/Lazy-{i + 1}.png", cv2.IMREAD_GRAYSCALE)
-            cv2.resize(img, (self.screen_w, self.screen_h))
-            mask_anim.append(img)
-        return mask_anim
-
-    def load_mask(self):
-        mask_anim = []
-        for i in range(13):
-            img = cv2.imread(
-                f"./Eye_Anim/Mask/Lazy_Mask-{i + 1}.png", cv2.IMREAD_GRAYSCALE
-            )
+        for i in range(16):
+            img = cv2.imread(f"{path}{i + 1}.png", cv2.IMREAD_GRAYSCALE)
             cv2.resize(img, (self.screen_w, self.screen_h))
             mask_anim.append(img)
         return mask_anim
@@ -110,21 +117,50 @@ class Eye:
             return dest
 
     def draw_iris(self, img, x, y):
-        cv2.circle(img, (x, y), self.iris_radius, (255, 255, 255), 3)
-        cv2.circle(img, (x, y), self.pupil_radius, (255, 255, 255), cv2.FILLED)
+        cv2.circle(img, (x, y), self.iris_radius, (255, 255, 255), cv2.FILLED)
+        cv2.circle(img, (x, y), self.pupil_radius, (0, 0, 0), cv2.FILLED)
         self.eye_pos = [x, y]
 
     def downsample(self, img):
         img = cv2.resize(img, (32, 32))
         return img
 
-    def animate_eye(self):
-        self.mask = self.mask_anim[self.anim_frame]
-        self.anim_frame += 1
-        if self.anim_frame >= self.end:
-            self.anim_frame = self.end
+    def sync_lid_with_eye(self):
+        eye_height = self.eye_pos[1] - self.min_y_pos
+        total_y_travel = self.max_y_pos - self.min_y_pos
+        portion_of_eye_travelled = eye_height / (total_y_travel)
+        upper_lid_offset = 4
+        lower_lid_offset = 2
 
-    def return_eye(self):
+        # Relating lid animation frame to eye position and offsetting it to make it look good
+        lid_frame_upper = round(portion_of_eye_travelled * 16)
+        lid_frame_upper -= upper_lid_offset
+        lid_frame_upper = max(0, min(lid_frame_upper, 15))
+        self.current_expression[0] = lid_frame_upper
+
+        lid_frame_lower = round(portion_of_eye_travelled * 8)
+        lid_frame_lower = 8 - lid_frame_lower - lower_lid_offset
+        lid_frame_lower = max(0, min(lid_frame_lower, 8))
+        self.current_expression[1] = lid_frame_lower
+
+    def animate_eye(self):
+        self.sync_lid_with_eye()
+
+        if self.ul_frame > self.current_expression[0]:
+            self.ul_frame -= 1
+        if self.ul_frame < self.current_expression[0]:
+            self.ul_frame += 1
+        if self.ll_frame > self.current_expression[1]:
+            self.ll_frame -= 1
+        if self.ll_frame < self.current_expression[1]:
+            self.ll_frame += 1
+
+        self.mask = cv2.bitwise_and(
+            self.ul_mask[self.ul_frame], self.ll_mask[self.ll_frame]
+        )
+
+    def reset_eye_position(self):
+        # Returns eye back to center position after not detecting face for some time
         if self.tracking_face:
             self.clock = 0
         if not self.tracking_face:
@@ -133,6 +169,7 @@ class Eye:
             self.face_pos = self.center
 
     def create_depth(self):
+        # Makes the eye look at you more realistically
         if not self.face_dist:
             return
         center_diff = [
@@ -140,18 +177,38 @@ class Eye:
             self.face_pos[1] - self.center[1],
         ]
 
-        face_dist_in_pixels = 1 / self.face_dist * self.depth_multiplier
-        xy_multiplier = self.eye_radius // face_dist_in_pixels
+        x = int(self.center[0] + center_diff[0] * 0.6)
+        y = int(self.center[1] + center_diff[1] * 0.6)
 
-        x = int(center_diff[0] * xy_multiplier)
-        y = int(center_diff[1] * xy_multiplier)
-        # x = int(self.center[0]) + int(
-        #     center_diff[0] * math.sqrt(self.face_dist) / self.depth_multiplier
-        # )
-        # y = int(self.center[1]) + int(
-        #     center_diff[1] * math.sqrt(self.face_dist) / self.depth_multiplier
-        # )
         self.face_pos = [x, y]
+
+    def lid_control(self):
+        key = cv2.waitKey(1)
+
+        # Upper
+        if key == ord("h"):
+            self.ul_frame += 1
+        if key == ord("j"):
+            self.ul_frame -= 1
+        if 0 > self.ul_frame:
+            self.ul_frame = 0
+        if self.ul_frame > 15:
+            self.ul_frame = 15
+
+        # Lower
+        if key == ord("k"):
+            self.ll_frame += 1
+        if key == ord("l"):
+            self.ll_frame -= 1
+        if 0 > self.ll_frame:
+            self.ll_frame = 0
+        if self.ll_frame > 15:
+            self.ll_frame = 15
+
+        # Change expression
+        if key == ord("e"):
+            expr_list = [*self.expressions.values()]
+            self.current_expression = random.choice(expr_list)
 
     def run(self):
         while True:
@@ -159,20 +216,36 @@ class Eye:
             img = cv2.flip(img, 1)
             self.find_face(img)
             self.create_depth()
-            self.return_eye()
+            self.reset_eye_position()
 
-            # draw img
+            self.animate_eye()
+
+            # Draw img
             img = np.zeros((self.screen_h, self.screen_w), np.uint8)
 
+            # Draw eye ring
+            cv2.circle(
+                img,
+                (self.center[0], self.center[1]),
+                self.eye_radius,
+                (255, 255, 255),
+                4,
+            )
+
+            # Draw eyeball
             self.move_eye(img, self.face_pos)
-            self.animate_eye()
 
             # Mask
             img = cv2.bitwise_and(img, img, mask=self.mask)
-            img = cv2.addWeighted(img, 1, self.line_anim[self.anim_frame], 1, 0)
+
+            # Add img, lower and upper lid lines together
+            img = cv2.addWeighted(img, 1, self.ul_line[self.ul_frame], 1, 0)
+            img = cv2.addWeighted(img, 1, self.ll_line[self.ll_frame], 1, 0)
 
             cv2.imshow("Output", img)
-            cv2.waitKey(1)
+
+            # Manual controls over eyelid positions
+            self.lid_control()
 
 
 if __name__ == "__main__":

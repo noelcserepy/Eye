@@ -1,6 +1,7 @@
 import cv2
 import math
 import random
+from datetime import date, datetime
 import numpy as np
 
 
@@ -15,10 +16,11 @@ class Eye:
         self.canvas = np.zeros((self.screen_h, self.screen_w), np.uint8)
 
         # Tracking
-        self.tracking_face = False
+        self.is_tracking_face = False
         self.clock = 0
         self.reset_timer = 50
         self.face_dist = 0
+        self.last_tracking_time = None
 
         # Eye parameters
         self.eye_radius = 150
@@ -26,7 +28,7 @@ class Eye:
         self.pupil_radius = 30
         self.eye_pos = [self.center[0], self.center[1]]
         self.iris_color = (239, 227, 142)
-        self.eye_speed = 25
+        self.eye_speed = 20
         self.min_distance = 3
         self.face_pos = [0, 0]
 
@@ -80,11 +82,11 @@ class Eye:
 
         # If face is detected: track face
         if face_found:
-            self.tracking_face = True
+            self.is_tracking_face = True
             self.face_pos = [focus_x, focus_y]
         # If face is not detected: stay put
         else:
-            self.tracking_face = False
+            self.is_tracking_face = False
 
     def move_eye(self, img, dest):
         # Moves iris smoothly. Speed determined by eye_speed
@@ -161,22 +163,28 @@ class Eye:
 
     def reset_eye_position(self):
         # Returns eye back to center position after not detecting face for some time
-        if self.tracking_face:
-            self.clock = 0
-        if not self.tracking_face:
-            self.clock += 1
-        if self.clock > self.reset_timer:
+        if self.is_tracking_face:
+            return
+        if not self.last_tracking_time:
+            self.last_tracking_time = datetime.now()
+
+        elapsed = (datetime.now() - self.last_tracking_time).total_seconds()
+        print(self.face_pos)
+        print(elapsed)
+        if elapsed >= 2:
             self.face_pos = self.center
+            self.last_tracking_time = None
+            elapsed = 0
 
     def create_depth(self):
         # Makes the eye look at you more realistically
-        if not self.face_dist:
+        if not self.is_tracking_face:
             return
+
         center_diff = [
             self.face_pos[0] - self.center[0],
             self.face_pos[1] - self.center[1],
         ]
-
         x = int(self.center[0] + center_diff[0] * 0.6)
         y = int(self.center[1] + center_diff[1] * 0.6)
 
@@ -215,7 +223,9 @@ class Eye:
             _, img = self.cap.read()
             img = cv2.flip(img, 1)
             self.find_face(img)
+
             self.create_depth()
+
             self.reset_eye_position()
 
             self.animate_eye()

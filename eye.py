@@ -35,6 +35,8 @@ class Eye:
         self.min_y_pos = self.center[1] - self.eye_radius
         self.max_y_pos = self.center[1] + self.eye_radius
 
+        self.angle = 0
+
         # Animation
         self.ul_line = self.load_anims("./Anims/Upper_Lid_Line/Upper_Lid_Line-")
         self.ul_mask = self.load_anims("./Anims/Upper_Lid_Mask/Upper_Lid_Mask-")
@@ -88,12 +90,24 @@ class Eye:
         else:
             self.is_tracking_face = False
 
-    def move_eye(self, img, dest):
+    def move_eye(self, img, destination):
         # Moves iris smoothly. Speed determined by eye_speed
-        dest = self.get_max_dest(dest)
+        self.center_diff = [
+            destination[0] - self.center[0],
+            destination[1] - self.center[1],
+        ]
+        self.center_dist = math.sqrt(
+            self.center_diff[0] ** 2 + self.center_diff[1] ** 2
+        )
+
+        # Get angle used for forming Iris ellipse
+        self.get_angle()
+
+        destination = self.get_max_dest(destination)
+
         diff = [
-            int(dest[0]) - int(self.eye_pos[0]),
-            int(dest[1]) - int(self.eye_pos[1]),
+            int(destination[0]) - int(self.eye_pos[0]),
+            int(destination[1]) - int(self.eye_pos[1]),
         ]
         distance = math.sqrt(diff[0] ** 2 + diff[1] ** 2)
 
@@ -104,23 +118,69 @@ class Eye:
         if distance < self.min_distance:
             self.draw_iris(img, self.eye_pos[0], self.eye_pos[1])
         else:
-            self.draw_iris(img, dest[0], dest[1])
+            self.draw_iris(img, destination[0], destination[1])
 
-    def get_max_dest(self, dest):
+    def get_max_dest(self, destination):
         # Prevents iris from moving outside of the eye mask
-        center_diff = [dest[0] - self.center[0], dest[1] - self.center[1]]
-        center_dist = math.sqrt(center_diff[0] ** 2 + center_diff[1] ** 2)
-
-        if center_dist > self.eye_radius:
-            max_x = self.center[0] + int(center_diff[0] / center_dist * self.eye_radius)
-            max_y = self.center[1] + int(center_diff[1] / center_dist * self.eye_radius)
+        if self.center_dist > self.eye_radius:
+            max_x = self.center[0] + int(
+                self.center_diff[0] / self.center_dist * self.eye_radius
+            )
+            max_y = self.center[1] + int(
+                self.center_diff[1] / self.center_dist * self.eye_radius
+            )
             return [max_x, max_y]
         else:
-            return dest
+            return destination
+
+    def get_angle(self):
+        # Calculates the angle of the eye in degrees
+        if self.center_dist != 0:
+            o_by_h = self.center_diff[1] / self.center_dist
+            angle = math.degrees(math.asin(o_by_h))
+
+            # Calculating so that increasing degrees == moving around the circle
+            # 0-90
+            if self.center_diff[0] >= 0 and self.center_diff[1] <= 0:
+                angle = angle + 90
+            # 90-180
+            if self.center_diff[0] >= 0 and self.center_diff[1] >= 0:
+                angle = angle + 90
+            # 180-270
+            if self.center_diff[0] <= 0 and self.center_diff[1] >= 0:
+                angle = 270 - angle
+            # 270-360
+            if self.center_diff[0] <= 0 and self.center_diff[1] <= 0:
+                angle = 270 - angle
+
+            self.angle = angle
 
     def draw_iris(self, img, x, y):
-        cv2.circle(img, (x, y), self.iris_radius, (255, 255, 255), cv2.FILLED)
-        cv2.circle(img, (x, y), self.pupil_radius, (0, 0, 0), cv2.FILLED)
+        squash_factor = 1 - (self.center_dist / 250)
+        squash_factor = max(0.3, min(squash_factor, 1))
+
+        cv2.ellipse(
+            img,
+            (x, y),
+            (self.iris_radius, int(self.iris_radius * squash_factor)),
+            self.angle,
+            0,
+            360,
+            (255, 255, 255),
+            cv2.FILLED,
+        )
+        cv2.ellipse(
+            img,
+            (x, y),
+            (self.pupil_radius, int(self.pupil_radius * squash_factor)),
+            self.angle,
+            0,
+            360,
+            (0, 0, 0),
+            cv2.FILLED,
+        )
+        # cv2.circle(img, (x, y), self.iris_radius, (255, 255, 255), cv2.FILLED)
+        # cv2.circle(img, (x, y), self.pupil_radius, (0, 0, 0), cv2.FILLED)
         self.eye_pos = [x, y]
 
     def downsample(self, img):
@@ -169,8 +229,6 @@ class Eye:
             self.last_tracking_time = datetime.now()
 
         elapsed = (datetime.now() - self.last_tracking_time).total_seconds()
-        print(self.face_pos)
-        print(elapsed)
         if elapsed >= 2:
             self.face_pos = self.center
             self.last_tracking_time = None

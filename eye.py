@@ -1,8 +1,9 @@
 import cv2
 import math
 import random
-from datetime import date, datetime
 import numpy as np
+from PIL import Image
+from datetime import date, datetime
 
 
 class Eye:
@@ -156,7 +157,7 @@ class Eye:
             self.angle = angle
 
     def draw_iris(self, img, x, y):
-        squash_factor = 1 - (self.center_dist / 250)
+        squash_factor = 1 - (self.center_dist / 320)
         squash_factor = max(0.3, min(squash_factor, 1))
 
         cv2.ellipse(
@@ -179,8 +180,6 @@ class Eye:
             (0, 0, 0),
             cv2.FILLED,
         )
-        # cv2.circle(img, (x, y), self.iris_radius, (255, 255, 255), cv2.FILLED)
-        # cv2.circle(img, (x, y), self.pupil_radius, (0, 0, 0), cv2.FILLED)
         self.eye_pos = [x, y]
 
     def downsample(self, img):
@@ -309,6 +308,16 @@ class Eye:
             # Add img, lower and upper lid lines together
             img = cv2.addWeighted(img, 1, self.ul_line[self.ul_frame], 1, 0)
             img = cv2.addWeighted(img, 1, self.ll_line[self.ll_frame], 1, 0)
+
+            # Crop to square
+            x_start_crop = round(self.center[0] - (self.screen_h / 2))
+            x_end_crop = x_start_crop + self.screen_h
+            img = img[0 : self.screen_h, x_start_crop:x_end_crop]
+
+            # Downsample
+            img = self.downsample(img)
+            image = Image.fromarray(img)
+            # image.show()
 
             cv2.imshow("Output", img)
 
